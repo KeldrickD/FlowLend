@@ -18,7 +18,7 @@ const config = fcl
   .put("0xFungibleToken", FUNGIBLE_TOKEN_ADDRESS);
 
 if (walletConnectProjectId) {
-  config.put("fcl.walletConnectV2.projectId", walletConnectProjectId);
+  config.put("walletconnect.projectId", walletConnectProjectId);
 } else {
   console.warn(
     "[FlowLend] NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID is not set. WalletConnect wallets may fail to connect."
