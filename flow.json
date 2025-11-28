@@ -1,0 +1,44 @@
+{
+  "networks": {
+    "emulator": "127.0.0.1:3569",
+    "testnet": "access.devnet.nodes.onflow.org:9000",
+    "mainnet": "access.mainnet.nodes.onflow.org:9000"
+  },
+  "contracts": {
+    "FungibleToken": {
+      "aliases": {
+        "testnet": "0x9a0766d93b6608b7"
+      }
+    },
+    "FlowToken": {
+      "aliases": {
+        "testnet": "0x7e60df042a9c0868"
+      }
+    },
+    "FlowLend": {
+      "source": "./cadence/contracts/FlowLend.cdc",
+      "aliases": {
+        "testnet": "0xcf265b057b710867"
+      }
+    }
+  },
+  "accounts": {
+    "flowlend-admin": {
+      "address": "0xcf265b057b710867",
+      "key": {
+        "type": "hex",
+        "index": 0,
+        "privateKey": "a02253a231475750da37656ee5c5698abdc55064bb32e578e8e110385061785b",
+        "hashAlgorithm": "SHA3_256",
+        "signatureAlgorithm": "ECDSA_P256"
+      }
+    }
+  },
+  "deployments": {
+    "testnet": {
+      "flowlend-admin": [
+        "FlowLend"
+      ]
+    }
+  }
+}
