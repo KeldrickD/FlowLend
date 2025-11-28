@@ -19,6 +19,31 @@ const config = fcl
 
 if (walletConnectProjectId) {
   config.put("walletconnect.projectId", walletConnectProjectId);
+
+  if (typeof window !== "undefined") {
+    (async () => {
+      try {
+        const { init } = await import("@onflow/fcl-wc");
+
+        const metadataUrl =
+          window.location?.origin ?? "https://flowlend.vercel.app";
+
+        const { FclWcServicePlugin } = await init({
+          projectId: walletConnectProjectId,
+          metadata: {
+            name: "FlowLend",
+            description: "Flow-native lending dashboard on testnet",
+            url: metadataUrl,
+            icons: ["https://flow.com/icons/icon-512x512.png"],
+          },
+        });
+
+        fcl.pluginRegistry.add(FclWcServicePlugin);
+      } catch (error) {
+        console.error("[FlowLend] Failed to initialize WalletConnect plugin", error);
+      }
+    })();
+  }
 } else {
   console.warn(
     "[FlowLend] NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID is not set. WalletConnect wallets may fail to connect."
