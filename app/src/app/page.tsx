@@ -57,6 +57,8 @@ export default function HomePage() {
 
   const fetchData = async () => {
     if (!user?.addr) return;
+    const userAddress = user.addr;
+    if (!userAddress) return;
     setLoadingData(true);
     try {
       const pos = await fcl.query({
@@ -67,7 +69,7 @@ export default function HomePage() {
               return FlowLend.getUserPosition(user: user)
           }
         `,
-        args: (arg: typeof fcl.arg, t: typeof fcl.t) => [arg(user.addr, t.Address)],
+        args: (arg: typeof fcl.arg, t: typeof fcl.t) => [arg(userAddress, t.Address)],
       });
 
       const hf = await fcl.query({
@@ -78,7 +80,7 @@ export default function HomePage() {
               return FlowLend.getUserHealthFactor(user: user)
           }
         `,
-        args: (arg: typeof fcl.arg, t: typeof fcl.t) => [arg(user.addr, t.Address)],
+        args: (arg: typeof fcl.arg, t: typeof fcl.t) => [arg(userAddress, t.Address)],
       });
 
       const pool = await fcl.query({

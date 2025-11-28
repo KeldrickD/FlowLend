@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "cross-env TURBOPACK=0 next build",
+    "build": "cross-env NEXT_FORCE_WEBPACK_BUILD=1 NEXT_RUNTIME=nodejs next build --webpack",
     "start": "next start",
     "lint": "eslint"
   },
