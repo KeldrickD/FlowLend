@@ -1,5 +1,11 @@
 import * as fcl from "@onflow/fcl";
 
+declare global {
+  interface Window {
+    __flowlendWcInitialized?: boolean;
+  }
+}
+
 const FLOWLEND_ADDRESS = "0xcf265b057b710867";
 const FLOW_TOKEN_ADDRESS = "0x7e60df042a9c0868";
 const FUNGIBLE_TOKEN_ADDRESS = "0x9a0766d93b6608b7";
@@ -9,10 +15,13 @@ const walletConnectProjectId =
 
 const config = fcl
   .config()
+  .put("flow.network", "testnet")
   .put("accessNode.api", "https://rest-testnet.onflow.org")
   .put("discovery.wallet", "https://fcl-discovery.onflow.org/testnet/authn")
+  .put("discovery.authn.endpoint", "https://rest-testnet.onflow.org/v1/authn")
+  .put("discovery.authz.endpoint", "https://rest-testnet.onflow.org/v1/authz")
   .put("app.detail.title", "FlowLend")
-  .put("app.detail.icon", "https://avatars.githubusercontent.com/u/0")
+  .put("app.detail.icon", "https://flow.com/favicon.ico")
   .put("0xFlowLend", FLOWLEND_ADDRESS)
   .put("0xFlowToken", FLOW_TOKEN_ADDRESS)
   .put("0xFungibleToken", FUNGIBLE_TOKEN_ADDRESS);
@@ -20,7 +29,9 @@ const config = fcl
 if (walletConnectProjectId) {
   config.put("walletconnect.projectId", walletConnectProjectId);
 
-  if (typeof window !== "undefined") {
+  if (typeof window !== "undefined" && !window.__flowlendWcInitialized) {
+    window.__flowlendWcInitialized = true;
+
     (async () => {
       try {
         const { init } = await import("@onflow/fcl-wc");
@@ -34,13 +45,17 @@ if (walletConnectProjectId) {
             name: "FlowLend",
             description: "Flow-native lending dashboard on testnet",
             url: metadataUrl,
-            icons: ["https://flow.com/icons/icon-512x512.png"],
+            icons: ["https://flow.com/favicon.ico"],
           },
         });
 
         fcl.pluginRegistry.add(FclWcServicePlugin);
       } catch (error) {
-        console.error("[FlowLend] Failed to initialize WalletConnect plugin", error);
+        console.error(
+          "[FlowLend] Failed to initialize WalletConnect plugin",
+          error
+        );
+        window.__flowlendWcInitialized = false;
       }
     })();
   }
