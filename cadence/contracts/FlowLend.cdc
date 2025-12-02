@@ -30,15 +30,38 @@ access(all) contract FlowLend {
         newDebt: UFix64
     )
 
+    access(all) event Liquidation(
+        borrower: Address,
+        liquidator: Address,
+        repaidDebt: UFix64,
+        collateralSeized: UFix64,
+        newBorrowerDebt: UFix64,
+        newBorrowerCollateral: UFix64
+    )
+
+    access(all) event FlashLoan(
+        initiator: Address,
+        amount: UFix64
+    )
+
+    // ---- Flash loan interface ----
+
+    access(all) resource interface FlashLoanReceiver {
+        access(all) fun onFlashLoan(
+            borrowed: @FlowToken.Vault,
+            amount: UFix64
+        ): @FlowToken.Vault
+    }
+
     // ---- Config ----
 
     /// Max percentage of collateral value that can be borrowed (0.75 = 75% LTV)
     access(all) let collateralFactor: UFix64
 
-    /// If health factor drops below this, position is liquidatable (not implemented yet, just tracked)
+    /// If health factor drops below this, position is liquidatable
     access(all) let liquidationThreshold: UFix64
 
-    /// Simple interest rate per second on borrows (e.g. 0.000001 ≈ 0.0001% / sec)
+    /// Legacy flat-rate config retained for upgrade compatibility (unused)
     access(all) let interestRatePerSecond: UFix64
 
     // ---- State ----
@@ -119,8 +142,64 @@ access(all) contract FlowLend {
             return 9999.0
         }
 
-        let maxBorrowable: UFix64 = collateral * self.collateralFactor
-        return maxBorrowable / borrowed
+        let price: UFix64 = self.getFlowPrice()
+        assert(price > 0.0, message: "FLOW price must be > 0")
+
+        let collateralValue: UFix64 = collateral * self.collateralFactor * price
+        let debtValue: UFix64 = borrowed * price
+        return collateralValue / debtValue
+    }
+
+    /// Utilization = totalBorrows / totalCollateral
+    access(all) fun getUtilization(): UFix64 {
+        if self.totalCollateral == 0.0 {
+            return 0.0
+        }
+        return self.totalBorrows / self.totalCollateral
+    }
+
+    /// Interest curve parameters (kept as funcs to avoid new stored fields on upgrade).
+    access(all) fun getBaseRatePerSecond(): UFix64 {
+        return 0.00000005
+    }
+
+    access(all) fun getSlope1PerSecond(): UFix64 {
+        return 0.00000030
+    }
+
+    access(all) fun getSlope2PerSecond(): UFix64 {
+        return 0.00000100
+    }
+
+    access(all) fun getTargetUtilization(): UFix64 {
+        return 0.80
+    }
+
+    access(all) fun getLiquidationBonus(): UFix64 {
+        return 0.08
+    }
+
+    /// Stubbed FLOW price (1.0) so math stays price-aware; swap with oracle later.
+    access(all) fun getFlowPrice(): UFix64 {
+        return 1.0
+    }
+
+    /// Compute borrow rate per second from utilization using a 2-slope model.
+    access(all) fun getBorrowRatePerSecond(utilization: UFix64): UFix64 {
+        let u: UFix64 = utilization
+        let baseRate: UFix64 = self.getBaseRatePerSecond()
+        let slope1: UFix64 = self.getSlope1PerSecond()
+        let slope2: UFix64 = self.getSlope2PerSecond()
+        let target: UFix64 = self.getTargetUtilization()
+
+        if u <= target {
+            // Below target: linear ramp from base rate to base + slope1
+            return baseRate + (u / target) * slope1
+        }
+
+        // Above target: steeper slope (slope2) on the excess utilization
+        let excess: UFix64 = (u - target) / (1.0 - target)
+        return baseRate + slope1 + (excess * slope2)
     }
 
     /// Accrue interest on all outstanding borrows based on time passed.
@@ -132,11 +211,13 @@ access(all) contract FlowLend {
             return
         }
 
-        // Simple continuous interest approximation:
-        // newDebt = oldDebt * (1 + ratePerSecond * delta)
-        let interestFactor: UFix64 = 1.0 + (self.interestRatePerSecond * delta)
+        if self.totalBorrows > 0.0 && self.totalCollateral > 0.0 {
+            let utilization: UFix64 = self.getUtilization()
+            let ratePerSecond: UFix64 = self.getBorrowRatePerSecond(utilization: utilization)
 
-        if self.totalBorrows > 0.0 {
+            // Discrete approximation: newDebt = oldDebt * (1 + rate * delta)
+            let interestFactor: UFix64 = 1.0 + (ratePerSecond * delta)
+
             self.totalBorrows = self.totalBorrows * interestFactor
 
             // Naive approach: scale each user's debt.
@@ -348,6 +429,132 @@ access(all) contract FlowLend {
         emit Repay(user: user, amount: repayAmount, newDebt: updated.borrowed)
     }
 
+    /// Liquidate an unhealthy borrower by repaying debt and seizing collateral + bonus.
+    access(all) fun liquidate(
+        borrower: Address,
+        fromVault: @FlowToken.Vault,
+        liquidator: Address
+    ): @FlowToken.Vault {
+        self.accrueInterest()
+
+        let repayAmount: UFix64 = fromVault.balance
+        assert(repayAmount > 0.0, message: "Repay amount must be > 0")
+
+        let current = self.readPosition(user: borrower)
+        assert(current.borrowed > 0.0, message: "Borrower has no debt")
+
+        let hf: UFix64 = self.computeHealthFactor(
+            collateral: current.collateral,
+            borrowed: current.borrowed
+        )
+        assert(
+            hf < self.liquidationThreshold,
+            message: "Position is not liquidatable"
+        )
+
+        assert(
+            repayAmount <= current.borrowed,
+            message: "Repay amount exceeds borrower debt"
+        )
+
+        let liquidationBonus: UFix64 = self.getLiquidationBonus()
+        let price: UFix64 = self.getFlowPrice()
+        assert(price > 0.0, message: "FLOW price must be > 0")
+
+        // Price-aware calc keeps math oracle-ready even though price = 1.0 for now.
+        let repayValue: UFix64 = repayAmount * price
+        let collateralValueNeeded: UFix64 = repayValue * (1.0 + liquidationBonus)
+        let collateralSeized: UFix64 = collateralValueNeeded / price
+        assert(
+            current.collateral >= collateralSeized,
+            message: "Not enough collateral to seize"
+        )
+
+        // Move repayment into protocol liquidity
+        self.liquidityVault.deposit(from: <- fromVault)
+
+        assert(
+            self.liquidityVault.balance >= collateralSeized,
+            message: "Protocol has insufficient liquidity for liquidation payout"
+        )
+
+        let updated = PositionInternal(
+            collateral: current.collateral - collateralSeized,
+            borrowed: current.borrowed - repayAmount
+        )
+        self.writePosition(user: borrower, position: updated)
+
+        self.totalBorrows = self.totalBorrows - repayAmount
+        self.totalCollateral = self.totalCollateral - collateralSeized
+
+        let rewardVault <- self.liquidityVault.withdraw(amount: collateralSeized) as! @FlowToken.Vault
+
+        emit Liquidation(
+            borrower: borrower,
+            liquidator: liquidator,
+            repaidDebt: repayAmount,
+            collateralSeized: collateralSeized,
+            newBorrowerDebt: updated.borrowed,
+            newBorrowerCollateral: updated.collateral
+        )
+
+        return <- rewardVault
+    }
+
+    /// Execute a flash loan that must be repaid within the same transaction.
+    access(all) fun flashLoan(
+        amount: UFix64,
+        receiver: &{FlashLoanReceiver},
+        initiator: Address
+    ) {
+        self.accrueInterest()
+
+        assert(amount > 0.0, message: "Flash loan amount must be > 0")
+        assert(
+            self.liquidityVault.balance >= amount,
+            message: "Not enough liquidity for flash loan"
+        )
+
+        let balanceBefore: UFix64 = self.liquidityVault.balance
+
+        let loan <- self.liquidityVault.withdraw(amount: amount) as! @FlowToken.Vault
+        let returned <- receiver.onFlashLoan(
+            borrowed: <- loan,
+            amount: amount
+        )
+
+        self.liquidityVault.deposit(from: <- returned)
+
+        assert(
+            self.liquidityVault.balance >= balanceBefore,
+            message: "Flash loan was not fully repaid"
+        )
+
+        emit FlashLoan(
+            initiator: initiator,
+            amount: amount
+        )
+    }
+
+    // ---- Flash loan demo helpers ----
+
+    access(all) resource DemoFlashLoanReceiver: FlashLoanReceiver {
+        access(all) fun onFlashLoan(
+            borrowed: @FlowToken.Vault,
+            amount: UFix64
+        ): @FlowToken.Vault {
+            log("DemoFlashLoanReceiver: received flash loan of")
+            log(amount)
+            return <- borrowed
+        }
+
+        init() {}
+    }
+
+    access(all) fun createDemoFlashLoanReceiver(): @DemoFlashLoanReceiver {
+        return <- create DemoFlashLoanReceiver()
+    }
+
     // ---- init / destroy ----
 
     init() {
@@ -356,7 +563,8 @@ access(all) contract FlowLend {
         self.totalBorrows = 0.0
         self.collateralFactor = 0.75
         self.liquidationThreshold = 1.05    // must keep HF above 1.05
-        self.interestRatePerSecond = 0.000001
+        // Legacy field retained for upgrade compatibility; dynamic rates use helpers above.
+        self.interestRatePerSecond = 0.00000005
         self.lastAccrualTimestamp = getCurrentBlock().timestamp
         self.liquidityVault <- FlowToken.createEmptyVault(
             vaultType: Type<@FlowToken.Vault>()

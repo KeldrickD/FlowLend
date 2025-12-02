@@ -49,6 +49,7 @@ export default function HomePage() {
   const [amount, setAmount] = useState("1.0");
   const [txStatus, setTxStatus] = useState<string | null>(null);
   const [loadingData, setLoadingData] = useState(false);
+  const [sponsoredMode, setSponsoredMode] = useState(false);
 
   const isLoggedIn = Boolean(user?.addr);
 
@@ -153,23 +154,30 @@ export default function HomePage() {
     cadence: string,
     argsBuilder?: CadenceArgsBuilder,
   ) => {
+    const prefix = sponsoredMode ? "[Sponsored preview] " : "";
     try {
-      setTxStatus("Pending…");
+      if (sponsoredMode) {
+        setTxStatus(
+          `${prefix}Simulating protocol-sponsored flow (still signs with your wallet).`,
+        );
+      } else {
+        setTxStatus("Pending…");
+      }
       const txId = await fcl.mutate({
         cadence,
         args: argsBuilder,
         limit: 9999,
       });
-      setTxStatus(`Submitted: ${txId}`);
+      setTxStatus(`${prefix}Submitted: ${txId}`);
       const result = await fcl.tx(txId).onceSealed();
-      setTxStatus(`Sealed: ${result.statusString}`);
+      setTxStatus(`${prefix}Sealed: ${result.statusString}`);
       await fetchData();
     } catch (err: unknown) {
       console.error("Flow transaction error", err);
       if (err instanceof Error) {
-        setTxStatus(formatTxError(err));
+        setTxStatus(`${prefix}${formatTxError(err)}`);
       } else {
-        setTxStatus("Error: Unknown failure");
+        setTxStatus(`${prefix}Error: Unknown failure`);
       }
     }
   };
@@ -275,7 +283,7 @@ export default function HomePage() {
           </p>
           <h1 className="text-3xl font-semibold">FlowLend Dashboard</h1>
           <p className="text-sm text-slate-400">
-            Manage your collateralized FLOW loans in a single panel.
+            Minimal Flow testnet lending built for consumer-scale, gasless UX.
           </p>
         </div>
         <div>
@@ -410,6 +418,19 @@ export default function HomePage() {
                   className="px-2 py-1 text-sm bg-slate-950 border border-slate-700 rounded-md font-mono"
                 />
               </label>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="text-xs flex items-center gap-2 text-slate-400">
+                <input
+                  type="checkbox"
+                  checked={sponsoredMode}
+                  onChange={(e) => setSponsoredMode(e.target.checked)}
+                />
+                <span>Sponsored mode (gasless UX preview)</span>
+              </label>
+              <p className="text-[11px] text-slate-500">
+                Production relayers or wallet sponsors (e.g., Blocto) would pay fees on behalf of the user.
+              </p>
             </div>
             <div className="flex flex-wrap gap-2">
               <button

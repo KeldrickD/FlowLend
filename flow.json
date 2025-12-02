@@ -20,6 +20,12 @@
       "aliases": {
         "testnet": "0xcf265b057b710867"
       }
+    },
+    "FlowLiquidStaking": {
+      "source": "./cadence/contracts/FlowLiquidStaking.cdc",
+      "aliases": {
+        "testnet": "0xcf265b057b710867"
+      }
     }
   },
   "accounts": {
@@ -37,7 +43,8 @@
   "deployments": {
     "testnet": {
       "flowlend-admin": [
-        "FlowLend"
+        "FlowLend",
+        "FlowLiquidStaking"
       ]
     }
   }
