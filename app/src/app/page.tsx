@@ -15,6 +15,13 @@ type PoolState = {
   utilizationRate: string;
 };
 
+type StakingState = {
+  totalStaked: string;
+  sSupply: string;
+  exchangeRate: string;
+  userSBalance: string;
+};
+
 type CadenceArgsBuilder = (arg: typeof fcl.arg, t: typeof fcl.t) => unknown[];
 
 const COLLATERAL_FACTOR = 0.75;
@@ -50,6 +57,10 @@ export default function HomePage() {
   const [txStatus, setTxStatus] = useState<string | null>(null);
   const [loadingData, setLoadingData] = useState(false);
   const [sponsoredMode, setSponsoredMode] = useState(false);
+  const [stakingState, setStakingState] = useState<StakingState | null>(null);
+  const [stakeAmount, setStakeAmount] = useState("1.0");
+  const [redeemAmount, setRedeemAmount] = useState("0.5");
+  const [flashLoanAmount, setFlashLoanAmount] = useState("0.5");
 
   const isLoggedIn = Boolean(user?.addr);
 
@@ -104,6 +115,43 @@ export default function HomePage() {
         totalBorrows: pool.totalBorrows,
         utilizationRate: pool.utilizationRate,
       });
+
+      const staking = await fcl.query({
+        cadence: `
+          import FlowLiquidStaking from 0xFlowLiquidStaking
+
+          pub struct StakingView {
+              pub let totalStaked: UFix64
+              pub let sSupply: UFix64
+              pub let exchangeRate: UFix64
+              pub let userSBalance: UFix64
+
+              init(totalStaked: UFix64, sSupply: UFix64, exchangeRate: UFix64, userSBalance: UFix64) {
+                  self.totalStaked = totalStaked
+                  self.sSupply = sSupply
+                  self.exchangeRate = exchangeRate
+                  self.userSBalance = userSBalance
+              }
+          }
+
+          access(all) fun main(user: Address): StakingView {
+              return StakingView(
+                  totalStaked: FlowLiquidStaking.totalStaked,
+                  sSupply: FlowLiquidStaking.sSupply,
+                  exchangeRate: FlowLiquidStaking.getExchangeRate(),
+                  userSBalance: FlowLiquidStaking.getSBalance(user: user)
+              )
+          }
+        `,
+        args: (arg: typeof fcl.arg, t: typeof fcl.t) => [arg(userAddress, t.Address)],
+      });
+
+      setStakingState({
+        totalStaked: staking.totalStaked,
+        sSupply: staking.sSupply,
+        exchangeRate: staking.exchangeRate,
+        userSBalance: staking.userSBalance,
+      });
     } catch (err) {
       console.error("Error fetching FlowLend data", err);
     } finally {
@@ -118,6 +166,7 @@ export default function HomePage() {
       setUserPosition(null);
       setPoolState(null);
       setHealthFactor(null);
+      setStakingState(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoggedIn]);
@@ -267,6 +316,79 @@ export default function HomePage() {
 
                 let payment <- userVaultRef.withdraw(amount: amount) as! @FlowToken.Vault
                 FlowLend.repay(fromVault: <- payment, user: acct.address)
+            }
+        }
+      `,
+      (arg: typeof fcl.arg, t: typeof fcl.t) => [arg(normalizedAmount, t.UFix64)],
+    );
+  };
+
+  const handleStake = () => {
+    const normalizedAmount = normalizeFix64(stakeAmount);
+    sendTx(
+      `
+        import FungibleToken from 0xFungibleToken
+        import FlowToken from 0xFlowToken
+        import FlowLiquidStaking from 0xFlowLiquidStaking
+
+        transaction(amount: UFix64) {
+            prepare(acct: auth(Storage) &Account) {
+                let vaultRef = acct.storage
+                    .borrow<auth(FungibleToken.Withdraw) &FlowToken.Vault>(from: /storage/flowTokenVault)
+                    ?? panic("Could not borrow reference to FLOW vault")
+
+                let payment <- vaultRef.withdraw(amount: amount) as! @FlowToken.Vault
+                FlowLiquidStaking.depositForStake(from: <- payment, user: acct.address)
+            }
+        }
+      `,
+      (arg: typeof fcl.arg, t: typeof fcl.t) => [arg(normalizedAmount, t.UFix64)],
+    );
+  };
+
+  const handleRedeemStake = () => {
+    const normalizedAmount = normalizeFix64(redeemAmount);
+    sendTx(
+      `
+        import FlowToken from 0xFlowToken
+        import FlowLiquidStaking from 0xFlowLiquidStaking
+
+        transaction(amount: UFix64) {
+            prepare(acct: auth(Storage) &Account) {
+                let payout <- FlowLiquidStaking.redeemStake(
+                    sAmount: amount,
+                    user: acct.address
+                )
+
+                let vaultRef = acct.storage
+                    .borrow<&FlowToken.Vault>(from: /storage/flowTokenVault)
+                    ?? panic("Could not borrow reference to FLOW vault")
+
+                vaultRef.deposit(from: <- payout)
+            }
+        }
+      `,
+      (arg: typeof fcl.arg, t: typeof fcl.t) => [arg(normalizedAmount, t.UFix64)],
+    );
+  };
+
+  const handleFlashLoanDemo = () => {
+    const normalizedAmount = normalizeFix64(flashLoanAmount);
+    sendTx(
+      `
+        import FlowLend from 0xFlowLend
+
+        transaction(amount: UFix64) {
+            prepare(acct: auth(Storage) &Account) {
+                let receiver <- FlowLend.createDemoFlashLoanReceiver()
+
+                FlowLend.flashLoan(
+                    amount: amount,
+                    receiver: &receiver as &{FlowLend.FlashLoanReceiver},
+                    initiator: acct.address
+                )
+
+                destroy receiver
             }
         }
       `,
@@ -461,6 +583,117 @@ export default function HomePage() {
             {txStatus && (
               <p className="text-xs text-slate-400 mt-2 break-all">Tx: {txStatus}</p>
             )}
+          </section>
+
+          <section className="w-full max-w-4xl rounded-xl border border-slate-800 bg-slate-900/40 p-4 flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <h2 className="font-semibold">Flash Loan Demo</h2>
+                <p className="text-xs text-slate-400">
+                  Showcases Flow&apos;s atomic, fee-free flash loans. For CLI, run{" "}
+                  <span className="font-mono">
+                    flow transactions send cadence/transactions/flash_loan_demo.cdc AMOUNT --network testnet --signer flowlend-admin
+                  </span>
+                  .
+                </p>
+              </div>
+            </div>
+            <label className="text-sm flex items-center gap-2">
+              Amount (FLOW)
+              <input
+                type="text"
+                value={flashLoanAmount}
+                onChange={(e) => setFlashLoanAmount(e.target.value)}
+                className="px-2 py-1 text-sm bg-slate-950 border border-slate-700 rounded-md font-mono"
+              />
+            </label>
+            <button
+              onClick={handleFlashLoanDemo}
+              className="px-3 py-2 text-xs bg-indigo-500 text-black rounded-lg font-semibold w-fit"
+            >
+              Run Flash Loan Demo
+            </button>
+          </section>
+
+          <section className="w-full max-w-4xl rounded-xl border border-slate-800 bg-slate-900/40 p-4 flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <h2 className="font-semibold">Liquid Staking (sFLOW)</h2>
+              <button
+                onClick={fetchData}
+                className="text-xs px-2 py-1 border border-slate-700 rounded-md"
+              >
+                Refresh
+              </button>
+            </div>
+            <div className="grid gap-2 text-sm md:grid-cols-2">
+              <p>
+                Total Staked:{" "}
+                <span className="font-mono">
+                  {formatted(stakingState?.totalStaked)} FLOW
+                </span>
+              </p>
+              <p>
+                sFLOW Supply:{" "}
+                <span className="font-mono">
+                  {formatted(stakingState?.sSupply)} sFLOW
+                </span>
+              </p>
+              <p>
+                Exchange Rate:{" "}
+                <span className="font-mono">
+                  {formatted(stakingState?.exchangeRate)} FLOW / sFLOW
+                </span>
+              </p>
+              <p>
+                Your sFLOW Balance:{" "}
+                <span className="font-mono">
+                  {formatted(stakingState?.userSBalance)} sFLOW
+                </span>
+              </p>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="flex flex-col gap-2">
+                <label className="text-sm flex items-center gap-2">
+                  Stake FLOW
+                  <input
+                    type="text"
+                    value={stakeAmount}
+                    onChange={(e) => setStakeAmount(e.target.value)}
+                    className="px-2 py-1 text-sm bg-slate-950 border border-slate-700 rounded-md font-mono"
+                  />
+                </label>
+                <button
+                  onClick={handleStake}
+                  className="px-3 py-2 text-xs bg-emerald-500 text-black rounded-lg font-semibold w-fit"
+                >
+                  Stake FLOW → sFLOW
+                </button>
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="text-sm flex items-center gap-2">
+                  Redeem sFLOW
+                  <input
+                    type="text"
+                    value={redeemAmount}
+                    onChange={(e) => setRedeemAmount(e.target.value)}
+                    className="px-2 py-1 text-sm bg-slate-950 border border-slate-700 rounded-md font-mono"
+                  />
+                </label>
+                <button
+                  onClick={handleRedeemStake}
+                  className="px-3 py-2 text-xs bg-slate-700 rounded-lg w-fit"
+                >
+                  Redeem to FLOW
+                </button>
+              </div>
+            </div>
+            <p className="text-xs text-slate-500">
+              Mirrors the CLI flow:{" "}
+              <span className="font-mono">
+                flow transactions send cadence/transactions/stake_flow.cdc AMOUNT --network testnet --signer flowlend-admin
+              </span>{" "}
+              and `redeem_flow.cdc`.
+            </p>
           </section>
         </>
       )}
