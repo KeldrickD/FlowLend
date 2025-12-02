@@ -1,3 +1,4 @@
+import FungibleToken from "FungibleToken"
 import FlowToken from "FlowToken"
 import FlowLiquidStaking from "FlowLiquidStaking"
 
@@ -5,7 +6,7 @@ import FlowLiquidStaking from "FlowLiquidStaking"
 transaction(amount: UFix64) {
     prepare(acct: auth(Storage) &Account) {
         let vaultRef = acct.storage
-            .borrow<&FlowToken.Vault>(from: /storage/flowTokenVault)
+            .borrow<auth(FungibleToken.Withdraw) &FlowToken.Vault>(from: /storage/flowTokenVault)
             ?? panic("Could not borrow reference to FLOW vault")
 
         let payment <- vaultRef.withdraw(amount: amount) as! @FlowToken.Vault
